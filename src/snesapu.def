@@ -1,0 +1,17 @@
+LIBRARY    snesapu
+EXPORTS
+	EmuAPU			@1
+	LoadSPCFile		@2
+	GetAPUData		@3
+	SNESAPUInfo		@4
+	SetAPULength		@5
+
+	SetAPUOpt		@6
+	GetSPCRegs		@7
+
+	SeekAPU			@8
+	SetAPUSmpClk		@9
+	SetDSPAmp		@10
+	SetDSPEFBCT		@11
+	SetDSPStereo		@12
+	SetDSPPitch		@13
