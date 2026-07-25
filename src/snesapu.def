@@ -15,3 +15,5 @@ EXPORTS
 	SetDSPEFBCT		@11
 	SetDSPStereo		@12
 	SetDSPPitch		@13
+	SetScript700		@14
+	try700			@15

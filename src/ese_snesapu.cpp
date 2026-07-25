@@ -5,6 +5,9 @@
 #include "stdafx.h"
 #include "gme/Music_Emu.h"
 #include "gme/Spc_Emu.h"
+#include "script700.h"
+#include <string>
+#include <vector>
 
 extern "C" {
 
@@ -71,6 +74,8 @@ __declspec(dllexport) void __stdcall SNESAPUInfo(u32 *pVer, u32 *pMin, u32 *pOpt
 __declspec(dllexport) u32 __stdcall SetAPULength(u32 song, u32 fade);
 __declspec(dllexport) void __stdcall SetAPUOpt(u32 mix, u32 chn, u32 bits, u32 rate, u32 inter, u32 opts);
 __declspec(dllexport) void __stdcall GetSPCRegs(u16 *pPC, u8 *pA, u8 *pY, u8 *pX, u8 *pPSW, u8 *pSP);
+__declspec(dllexport) s32 __stdcall SetScript700(void *pSource);
+__declspec(dllexport) u32 __stdcall try700(void *pFile);
 
 // Dummy
 __declspec(dllexport) void __stdcall SeekAPU(u32 time, b8 fast);
@@ -94,6 +99,47 @@ Spc_Emu *snes = 0;
 bool is_setrate = false;
 u32 maxL,maxR;
 u32 timercnt;
+Script700 script700;
+u8 scriptInputPorts[4];
+u8 scriptOutputPorts[4];
+unsigned long long scriptTickRemainder;
+
+void ApplyScript700Options()
+{
+	if (!emu || !snes)
+		return;
+	emu->set_volume(script700.volume());
+}
+
+void RefreshScript700OutputPorts()
+{
+	if (!snes || !script700.enabled())
+		return;
+
+	for (int i = 0; i < 4; ++i)
+		scriptOutputPorts[i] = static_cast<u8>(snes->apu.read_port(0, i));
+}
+
+void FlushScript700InputPorts()
+{
+	if (!snes || !script700.enabled())
+		return;
+
+	u8 port = 0;
+	u8 value = 0;
+	while (script700.takeInputPortWrite(port, value))
+		snes->apu.write_port(0, port, value);
+}
+
+void UpdateScript700Ports()
+{
+	if (!snes || !script700.enabled())
+		return;
+
+	RefreshScript700OutputPorts();
+	script700.advance(0);
+	FlushScript700InputPorts();
+}
 
 // Get version
 __declspec(dllexport) void __stdcall SNESAPUInfo(u32 *pVer, u32 *pMin, u32 *pOpt)
@@ -122,8 +168,23 @@ void __stdcall LoadSPCFile(void *pFile)
 	gme_open_data( pFile, 66048, &emu, smprate );
 	if (emu) {
 //		emu->set_sample_rate( smprate );
+		// Script700 timing must advance one-to-one with requested output.
+		// GME's automatic initial-silence skip advances only the SPC core and
+		// would leave the external Script700 VM behind.
+		emu->ignore_silence();
 		emu->start_track( 0 );
 		snes = dynamic_cast<Spc_Emu*>(emu);
+		if (script700.enabled())
+			ApplyScript700Options();
+		memset(scriptInputPorts, 0, sizeof(scriptInputPorts));
+		memset(scriptOutputPorts, 0, sizeof(scriptOutputPorts));
+		scriptTickRemainder = 0;
+		if (snes) {
+			script700.attach(snes->apu.smp_ram(), scriptInputPorts, scriptOutputPorts);
+			script700.reset();
+			if (script700.enabled())
+				UpdateScript700Ports();
+		}
 	}
 	mask = 0;
 }
@@ -133,23 +194,134 @@ void* __stdcall EmuAPU(void *pBuf, u32 len, u8 type)
 {
 	if (type == 1) {
 		if (emu) {
-			// Mask更新
+			// Mask譖ｴ譁ｰ
 			int mask = 0;
 			for (int i=0; i < 8; i++) {
 				mask |= (voice[i].mFlg << i);
 			}
 			emu->mute_voices(mask);
 
-			// Render
-			emu->play(len*2, (short*)pBuf);
+			// Render. Split at Script700 wait boundaries so port writes occur
+			// at the corresponding 2.048 MHz script clock.
+			u32 framesLeft = len;
+			short* output = static_cast<short*>(pBuf);
+			while (framesLeft) {
+				UpdateScript700Ports();
 
-			// Info系はここで更新
+				u32 frames = framesLeft;
+				const unsigned long long wait = script700.waitTicks();
+				const u32 effectiveRate = static_cast<u32>(emu->sample_rate());
+				if (script700.enabled() && wait) {
+					const unsigned long long scaledWait = wait * effectiveRate;
+					const unsigned long long needed =
+						scaledWait > scriptTickRemainder ? scaledWait - scriptTickRemainder : 1;
+					unsigned long long untilEvent = (needed + 2047999) / 2048000;
+					if (!untilEvent)
+						untilEvent = 1;
+					if (untilEvent < frames)
+						frames = static_cast<u32>(untilEvent);
+				}
+
+				emu->play(frames * 2, output);
+				output += frames * 2;
+				framesLeft -= frames;
+
+				const unsigned long long accumulated =
+					scriptTickRemainder + static_cast<unsigned long long>(frames) * 2048000;
+				const unsigned long long ticks = accumulated / effectiveRate;
+				scriptTickRemainder = accumulated % effectiveRate;
+				// The script must observe ports written during the interval that
+				// has just finished, especially for periodic m oN iN loops.
+				RefreshScript700OutputPorts();
+				script700.advance(ticks);
+				// Apply writes at the exact wait boundary, including when this
+				// is the final slice of the caller's output buffer.
+				FlushScript700InputPorts();
+			}
+
+			// Info邉ｻ縺ｯ縺薙％縺ｧ譖ｴ譁ｰ
 			memcpy(ram, snes->apu.m.ram.ram, sizeof(ram));
 			memcpy(dsp.reg, snes->apu.dsp.m.regs, sizeof(snes->apu.dsp.m.regs));
 
 		}
 	}
 	return (short*)pBuf + len * 2;
+}
+
+s32 __stdcall SetScript700(void *pSource)
+{
+	const s32 result = script700.compile(static_cast<const char*>(pSource));
+	ApplyScript700Options();
+	return result;
+}
+
+bool LoadScript700File(const std::wstring& path)
+{
+	HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL,
+		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (file == INVALID_HANDLE_VALUE)
+		return false;
+
+	const DWORD size = GetFileSize(file, NULL);
+	if (size == INVALID_FILE_SIZE) {
+		CloseHandle(file);
+		return false;
+	}
+
+	std::vector<char> source(static_cast<size_t>(size) + 1, 0);
+	DWORD read = 0;
+	const BOOL succeeded = ReadFile(file, source.data(), size, &read, NULL);
+	CloseHandle(file);
+	if (!succeeded || read != size)
+		return false;
+
+	const s32 result = script700.compile(source.data(), read);
+	ApplyScript700Options();
+	return result >= 1;
+}
+
+u32 __stdcall try700(void *pFile)
+{
+	if (!pFile) {
+		SetScript700(NULL);
+		return 0;
+	}
+
+	std::wstring spcPath;
+	const unsigned char* bytes = static_cast<const unsigned char*>(pFile);
+	if (bytes[1] == 0) {
+		spcPath = static_cast<const wchar_t*>(pFile);
+	}
+	else {
+		const char* ansiPath = static_cast<const char*>(pFile);
+		const int length = MultiByteToWideChar(CP_ACP, 0, ansiPath, -1, NULL, 0);
+		if (length <= 0) {
+			SetScript700(NULL);
+			return 0;
+		}
+		std::vector<wchar_t> wide(static_cast<size_t>(length));
+		MultiByteToWideChar(CP_ACP, 0, ansiPath, -1, wide.data(), length);
+		spcPath.assign(wide.data());
+	}
+
+	const std::wstring::size_type slash = spcPath.find_last_of(L"\\/");
+	const std::wstring::size_type dot = spcPath.find_last_of(L'.');
+	const std::wstring base = dot != std::wstring::npos &&
+		(slash == std::wstring::npos || dot > slash) ? spcPath.substr(0, dot) : spcPath;
+	const std::wstring directory = slash == std::wstring::npos ?
+		std::wstring() : spcPath.substr(0, slash + 1);
+	const std::wstring candidates[] = {
+		base + L".700",
+		base + L".7se",
+		directory + L"65816.700"
+	};
+
+	for (const std::wstring& candidate : candidates)
+		if (LoadScript700File(candidate))
+			return 1;
+
+	SetScript700(NULL);
+	return 0;
 }
 
 // Play time
@@ -184,7 +356,7 @@ void __stdcall GetAPUData(u8 **ppRAM, u8 **ppXRAM, u8 **ppOutPort, u32 **ppT64Cn
 void __stdcall SetAPUOpt(u32 mix, u32 chn, u32 bits, u32 rate, u32 inter, u32 opts){
 	smprate = rate;
 	if (emu)
-		emu->set_sample_rate( rate );
+		emu->set_sample_rate(rate);
 }
 
 // Dummy
