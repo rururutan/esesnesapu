@@ -15,6 +15,12 @@ SNESAPUがx86以外に対応するまでの繋ぎです。
 ## 制限
 
 * 再現性はSNESAPU比で劣ります
-* Script700には対応していません
 * 大昔に作ったソフトなのでノーサポート
+
+## Configure & Build
+
+```bash
+cmake -S src -B build -A x64
+cmake --build build --config Release
+```
 
