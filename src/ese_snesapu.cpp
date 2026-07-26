@@ -103,7 +103,6 @@ u32 timercnt;
 Script700 script700;
 u8 scriptInputPorts[4];
 u8 scriptOutputPorts[4];
-unsigned long long scriptTickRemainder;
 
 void ApplyScript700Options()
 {
@@ -142,6 +141,31 @@ void UpdateScript700Ports()
 	FlushScript700InputPorts();
 }
 
+int Script700NativePlayLimit(void*, int count)
+{
+	UpdateScript700Ports();
+	if (!script700.enabled() || !script700.waitTicks())
+		return count;
+
+	unsigned long long frames = (script700.waitTicks() + 63) / 64;
+	const unsigned long long available = static_cast<unsigned long long>(count / 2);
+	if (frames > available)
+		frames = available;
+	if (!frames)
+		frames = 1;
+	return static_cast<int>(frames * 2);
+}
+
+void Script700NativePlayAdvance(void*, int count)
+{
+	if (!script700.enabled())
+		return;
+
+	RefreshScript700OutputPorts();
+	script700.advance(static_cast<unsigned long long>(count / 2) * 64);
+	FlushScript700InputPorts();
+}
+
 // Get version
 __declspec(dllexport) void __stdcall SNESAPUInfo(u32 *pVer, u32 *pMin, u32 *pOpt)
 {
@@ -175,12 +199,12 @@ void __stdcall LoadSPCFile(void *pFile)
 		emu->ignore_silence();
 		emu->start_track( 0 );
 		snes = dynamic_cast<Spc_Emu*>(emu);
-		if (script700.enabled())
-			ApplyScript700Options();
+		ApplyScript700Options();
 		memset(scriptInputPorts, 0, sizeof(scriptInputPorts));
 		memset(scriptOutputPorts, 0, sizeof(scriptOutputPorts));
-		scriptTickRemainder = 0;
 		if (snes) {
+			snes->set_native_play_callbacks(NULL,
+				Script700NativePlayLimit, Script700NativePlayAdvance);
 			script700.attach(snes->apu.smp_ram(), scriptInputPorts, scriptOutputPorts);
 			script700.reset();
 			if (script700.enabled())
@@ -202,43 +226,9 @@ void* __stdcall EmuAPU(void *pBuf, u32 len, u8 type)
 			}
 			emu->mute_voices(mask);
 
-			// Render. Split at Script700 wait boundaries so port writes occur
-			// at the corresponding 2.048 MHz script clock.
-			u32 framesLeft = len;
-			short* output = static_cast<short*>(pBuf);
-			while (framesLeft) {
-				UpdateScript700Ports();
-
-				u32 frames = framesLeft;
-				const unsigned long long wait = script700.waitTicks();
-				const u32 effectiveRate = static_cast<u32>(emu->sample_rate());
-				if (script700.enabled() && wait) {
-					const unsigned long long scaledWait = wait * effectiveRate;
-					const unsigned long long needed =
-						scaledWait > scriptTickRemainder ? scaledWait - scriptTickRemainder : 1;
-					unsigned long long untilEvent = (needed + 2047999) / 2048000;
-					if (!untilEvent)
-						untilEvent = 1;
-					if (untilEvent < frames)
-						frames = static_cast<u32>(untilEvent);
-				}
-
-				emu->play(frames * 2, output);
-				output += frames * 2;
-				framesLeft -= frames;
-
-				const unsigned long long accumulated =
-					scriptTickRemainder + static_cast<unsigned long long>(frames) * 2048000;
-				const unsigned long long ticks = accumulated / effectiveRate;
-				scriptTickRemainder = accumulated % effectiveRate;
-				// The script must observe ports written during the interval that
-				// has just finished, especially for periodic m oN iN loops.
-				RefreshScript700OutputPorts();
-				script700.advance(ticks);
-				// Apply writes at the exact wait boundary, including when this
-				// is the final slice of the caller's output buffer.
-				FlushScript700InputPorts();
-			}
+			// Spc_Emu splits native 32 kHz generation at Script700 boundaries
+			// before applying its output-rate resampler.
+			emu->play(len * 2, static_cast<short*>(pBuf));
 
 			// Info系はここで更新
 			memcpy(ram, snes->apu.m.ram.ram, sizeof(ram));
@@ -365,8 +355,31 @@ void __stdcall SetAPUOpt(u32 mix, u32 chn, u32 bits, u32 rate, u32 inter, u32 op
 		emu->set_sample_rate(rate);
 }
 
+void __stdcall SeekAPU(u32 time, b8 fast)
+{
+	if (!emu || !time)
+		return;
+
+	const unsigned long long totalFrames =
+		(static_cast<unsigned long long>(time) * emu->sample_rate()) / 64000;
+	unsigned long long framesLeft = totalFrames;
+	std::vector<short> buffer(4096 * 2);
+	while (framesLeft)
+	{
+		const int frames = static_cast<int>(
+			framesLeft < 4096 ? framesLeft : 4096);
+		emu->play(frames * 2, buffer.data());
+		framesLeft -= frames;
+	}
+
+	if (snes)
+	{
+		memcpy(ram, snes->apu.m.ram.ram, sizeof(ram));
+		memcpy(dsp.reg, snes->apu.dsp.m.regs, sizeof(snes->apu.dsp.m.regs));
+	}
+}
+
 // Dummy
-void __stdcall SeekAPU(u32 time, b8 fast) {}
 void __stdcall SetAPUSmpClk(u32 speed) {};
 void __stdcall SetDSPAmp(u32 amp) {}
 void __stdcall SetDSPEFBCT(s32 leak) {}

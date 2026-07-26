@@ -28,6 +28,17 @@ public:
 	// Enables gaussian, cubic or sinc interpolation
 	void interpolation_level( int level = 0 )   { apu.interpolation_level( level ); }
 
+	// Allows an external timing engine to split native 32 kHz generation.
+	typedef int  (*native_play_limit_t)( void*, int );
+	typedef void (*native_play_advance_t)( void*, int );
+	void set_native_play_callbacks( void* data, native_play_limit_t limit,
+			native_play_advance_t advance )
+	{
+		native_play_data = data;
+		native_play_limit = limit;
+		native_play_advance = advance;
+	}
+
 	// SPC file header
 	struct header_t
 	{
@@ -75,6 +86,9 @@ protected:
 private:
 	Spc_Emu_Resampler resampler;
 	SPC_Filter filter;
+	void* native_play_data;
+	native_play_limit_t native_play_limit;
+	native_play_advance_t native_play_advance;
 public:
 	Snes_Spc apu;
 private:

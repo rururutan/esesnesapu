@@ -21,6 +21,9 @@ Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA */
 
 Spc_Emu::Spc_Emu()
 {
+	native_play_data = NULL;
+	native_play_limit = NULL;
+	native_play_advance = NULL;
 	set_type( gme_spc_type );
 	set_gain( 1.4 );
 }
@@ -345,8 +348,27 @@ blargg_err_t Spc_Emu::start_track_( int track )
 
 blargg_err_t Spc_Emu::play_and_filter( int count, sample_t out [] )
 {
-	RETURN_ERR( apu.play( count, out ) );
-	filter.run( out, count );
+	int remain = count;
+	while ( remain > 0 )
+	{
+		int current = remain;
+		if ( native_play_limit )
+		{
+			current = native_play_limit( native_play_data, current );
+			if ( current <= 0 || current > remain )
+				current = remain;
+			current &= ~1;
+			if ( !current )
+				current = 2;
+		}
+
+		RETURN_ERR( apu.play( current, out ) );
+		filter.run( out, current );
+		if ( native_play_advance )
+			native_play_advance( native_play_data, current );
+		out += current;
+		remain -= current;
+	}
 	return blargg_ok;
 }
 
