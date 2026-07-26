@@ -103,12 +103,13 @@ u32 timercnt;
 Script700 script700;
 u8 scriptInputPorts[4];
 u8 scriptOutputPorts[4];
+u32 dspAmp = 65536;
 
 void ApplyScript700Options()
 {
 	if (!emu || !snes)
 		return;
-	emu->set_volume(script700.volume());
+	emu->set_volume(static_cast<float>(dspAmp / 65536.0) * script700.volume());
 }
 
 void RefreshScript700OutputPorts()
@@ -379,9 +380,20 @@ void __stdcall SeekAPU(u32 time, b8 fast)
 	}
 }
 
+void __stdcall SetDSPAmp(u32 amp)
+{
+	const s32 signedAmp = static_cast<s32>(amp);
+	if (signedAmp < 0)
+		dspAmp = 0;
+	else if (amp <= 256)
+		dspAmp = amp << 12;
+	else
+		dspAmp = amp;
+	ApplyScript700Options();
+}
+
 // Dummy
 void __stdcall SetAPUSmpClk(u32 speed) {};
-void __stdcall SetDSPAmp(u32 amp) {}
 void __stdcall SetDSPEFBCT(s32 leak) {}
 void __stdcall SetDSPStereo(u32 sep) {}
 void __stdcall SetDSPPitch(u32 base) {}

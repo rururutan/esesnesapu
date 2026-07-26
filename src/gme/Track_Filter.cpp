@@ -187,7 +187,12 @@ void Track_Filter::handle_volume( sample_t out [], int out_count )
     sample_t* io = &out[0];
     for ( int i = 0; i < out_count; ++i)
     {
-        *io = sample_t ((*io * gain) >> shift);
+        BOOST::int64_t sample = (BOOST::int64_t) *io * gain >> shift;
+        if ( sample > 0x7FFF )
+            sample = 0x7FFF;
+        else if ( sample < -0x8000 )
+            sample = -0x8000;
+        *io = sample_t (sample);
         ++io;
     }
 }
