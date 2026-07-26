@@ -17,3 +17,4 @@ EXPORTS
 	SetDSPPitch		@13
 	SetScript700		@14
 	try700			@15
+	InitWork_700		@16

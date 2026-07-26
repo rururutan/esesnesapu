@@ -76,6 +76,7 @@ __declspec(dllexport) void __stdcall SetAPUOpt(u32 mix, u32 chn, u32 bits, u32 r
 __declspec(dllexport) void __stdcall GetSPCRegs(u16 *pPC, u8 *pA, u8 *pY, u8 *pX, u8 *pPSW, u8 *pSP);
 __declspec(dllexport) s32 __stdcall SetScript700(void *pSource);
 __declspec(dllexport) u32 __stdcall try700(void *pFile);
+__declspec(dllexport) void __stdcall InitWork_700();
 
 // Dummy
 __declspec(dllexport) void __stdcall SeekAPU(u32 time, b8 fast);
@@ -322,6 +323,11 @@ u32 __stdcall try700(void *pFile)
 
 	SetScript700(NULL);
 	return 0;
+}
+
+void __stdcall InitWork_700()
+{
+	SetScript700(NULL);
 }
 
 // Play time
