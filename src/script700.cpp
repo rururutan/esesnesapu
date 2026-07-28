@@ -344,9 +344,12 @@ int Script700::compile(const char* source, std::size_t length)
 				  command == "u" || command == "d") && line.arguments.size() == 2)
 		{
 			const bool compare = command == "c";
+			std::uint32_t port = 0;
 			if (!parseOperand(line.arguments[0], false, true, instruction.first) ||
 				!parseOperand(line.arguments[1], true, compare, instruction.second))
 				goto compile_error;
+			if (compare && parseNumber(line.arguments[1], port))
+				instruction.second.type = OperandType::OutputPort;
 			if (command == "m") instruction.code = OpCode::Move;
 			if (command == "c") instruction.code = OpCode::Compare;
 			if (command == "a") instruction.code = OpCode::Add;
