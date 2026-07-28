@@ -104,6 +104,7 @@ Script700 script700;
 u8 scriptInputPorts[4];
 u8 scriptOutputPorts[4];
 u32 dspAmp = 65536;
+unsigned long long t64Remainder;
 
 void ApplyScript700Options()
 {
@@ -167,6 +168,17 @@ void Script700NativePlayAdvance(void*, int count)
 	FlushScript700InputPorts();
 }
 
+void AdvanceT64Counter(unsigned long long frames)
+{
+	if (!emu || !emu->sample_rate())
+		return;
+
+	const unsigned long long accumulated =
+		t64Remainder + frames * 64000;
+	timercnt += static_cast<u32>(accumulated / emu->sample_rate());
+	t64Remainder = accumulated % emu->sample_rate();
+}
+
 // Get version
 __declspec(dllexport) void __stdcall SNESAPUInfo(u32 *pVer, u32 *pMin, u32 *pOpt)
 {
@@ -191,6 +203,8 @@ void __stdcall LoadSPCFile(void *pFile)
 {
 	if (emu) gme_delete( emu );
 
+	timercnt = 0;
+	t64Remainder = 0;
 	gme_open_data( pFile, 66048, &emu, smprate );
 	if (emu) {
 //		emu->set_sample_rate( smprate );
@@ -230,6 +244,7 @@ void* __stdcall EmuAPU(void *pBuf, u32 len, u8 type)
 			// Spc_Emu splits native 32 kHz generation at Script700 boundaries
 			// before applying its output-rate resampler.
 			emu->play(len * 2, static_cast<short*>(pBuf));
+			AdvanceT64Counter(len);
 
 			// Info系はここで更新
 			memcpy(ram, snes->apu.m.ram.ram, sizeof(ram));
@@ -372,6 +387,7 @@ void __stdcall SeekAPU(u32 time, b8 fast)
 		emu->play(frames * 2, buffer.data());
 		framesLeft -= frames;
 	}
+	AdvanceT64Counter(totalFrames);
 
 	if (snes)
 	{
