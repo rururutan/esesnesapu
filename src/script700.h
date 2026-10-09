@@ -55,6 +55,9 @@ private:
 	enum class OpCode
 	{
 		Wait,
+		Flush,
+		FlushDisable,
+		FlushEnable,
 		Move,
 		Compare,
 		Add,
@@ -105,6 +108,9 @@ private:
 	std::uint64_t waitTicks_;
 	bool enabled_;
 	bool stopped_;
+	bool flushEnabled_;
+	bool flushWaiting_;
+	std::uint8_t flushPorts_[4];
 	std::uint8_t* ram_;
 	std::uint8_t* inputPorts_;
 	std::uint8_t* outputPorts_;

@@ -52,12 +52,14 @@ namespace
 }
 
 Script700::Script700()
-	: pc_(0), waitTicks_(0), enabled_(false), stopped_(true), ram_(nullptr),
+	: pc_(0), waitTicks_(0), enabled_(false), stopped_(true),
+	  flushEnabled_(true), flushWaiting_(false), ram_(nullptr),
 	  inputPorts_(nullptr), outputPorts_(nullptr), volume_(1.0f)
 {
 	std::fill(work_, work_ + 8, 0);
 	std::fill(compare_, compare_ + 2, 0);
 	std::fill(sourceMute_, sourceMute_ + 256, false);
+	std::fill(flushPorts_, flushPorts_ + 4, 0);
 }
 
 void Script700::attach(std::uint8_t* ram, std::uint8_t* inputPorts, std::uint8_t* outputPorts)
@@ -84,6 +86,10 @@ void Script700::reset()
 	pc_ = 0;
 	waitTicks_ = 0;
 	inputPortWrites_.clear();
+	flushEnabled_ = true;
+	flushWaiting_ = false;
+	for (unsigned i = 0; i < 4; ++i)
+		flushPorts_[i] = inputPorts_ ? inputPorts_[i] : 0;
 	stopped_ = !enabled_;
 }
 
@@ -109,7 +115,7 @@ const std::string& Script700::error() const
 
 std::uint64_t Script700::waitTicks() const
 {
-	return waitTicks_;
+	return flushWaiting_ ? 64 : waitTicks_;
 }
 
 bool Script700::takeInputPortWrite(std::uint8_t& port, std::uint8_t& value)
@@ -273,6 +279,13 @@ int Script700::compile(const char* source, std::size_t length)
 			operand = { OperandType::Work, index & 7 };
 			return true;
 		}
+		if (value == "i?" || value == "o?" || value == "w?")
+		{
+			operand = Operand(value[0] == 'i' ? OperandType::InputPort :
+				(value[0] == 'o' ? OperandType::OutputPort : OperandType::Work),
+				0, destination ? 1 : 0);
+			return true;
+		}
 		if (value[0] == 'i' && parseNumber(value.substr(1), index))
 		{
 			operand = { OperandType::InputPort, index & 3 };
@@ -331,6 +344,10 @@ int Script700::compile(const char* source, std::size_t length)
 			instruction.code = OpCode::Quit;
 		else if (command == "nop")
 			instruction.code = OpCode::Nop;
+		else if ((command == "f" || command == "f0" || command == "f1") &&
+			line.arguments.empty())
+			instruction.code = command == "f" ? OpCode::Flush :
+				(command == "f0" ? OpCode::FlushDisable : OpCode::FlushEnable);
 		else if (command == "w" && line.arguments.size() == 1)
 		{
 			instruction.code = OpCode::Wait;
@@ -464,8 +481,12 @@ void Script700::write(const Operand& operand, std::uint32_t value)
 		{
 			const std::uint8_t port = static_cast<std::uint8_t>(index & 3);
 			const std::uint8_t byte = static_cast<std::uint8_t>(value);
-			inputPorts_[port] = byte;
-			inputPortWrites_.push_back(std::make_pair(port, byte));
+			flushPorts_[port] = byte;
+			if (flushEnabled_)
+			{
+				inputPorts_[port] = byte;
+				inputPortWrites_.push_back(std::make_pair(port, byte));
+			}
 		}
 		break;
 	case OperandType::OutputPort:
@@ -501,6 +522,15 @@ void Script700::advance(std::uint64_t ticks)
 {
 	if (!enabled_ || stopped_)
 		return;
+	if (flushWaiting_)
+	{
+		compare_[0] += static_cast<std::uint32_t>(ticks);
+		if (!inputPortWrites_.empty() || !outputPorts_ || outputPorts_[0] != flushPorts_[0])
+			return;
+		flushWaiting_ = false;
+		flushEnabled_ = true;
+		ticks = 0;
+	}
 	if (waitTicks_ > ticks)
 	{
 		waitTicks_ -= ticks;
@@ -522,7 +552,7 @@ void Script700::advance(std::uint64_t ticks)
 void Script700::run()
 {
 	std::size_t budget = 100000;
-	while (!stopped_ && waitTicks_ == 0 && pc_ < program_.size() && budget--)
+	while (!stopped_ && !flushWaiting_ && waitTicks_ == 0 && pc_ < program_.size() && budget--)
 	{
 		const Instruction& instruction = program_[pc_++];
 		const std::uint32_t source = read(instruction.first);
@@ -533,6 +563,18 @@ void Script700::run()
 		{
 		case OpCode::Wait:
 			waitTicks_ = source;
+			break;
+		case OpCode::FlushDisable: flushEnabled_ = false; break;
+		case OpCode::FlushEnable: flushEnabled_ = true; break;
+		case OpCode::Flush:
+			for (unsigned i = 1; i <= 4; ++i)
+			{
+				const std::uint8_t port = static_cast<std::uint8_t>(i & 3);
+				if (inputPorts_) inputPorts_[port] = flushPorts_[port];
+				inputPortWrites_.push_back(std::make_pair(port, flushPorts_[port]));
+			}
+			compare_[0] = 0;
+			flushWaiting_ = true;
 			break;
 		case OpCode::Move: write(instruction.second, source); break;
 		case OpCode::Compare: compare_[0] = source; compare_[1] = destination; break;
