@@ -28,7 +28,8 @@ public:
 	// Enables gaussian, cubic or sinc interpolation
 	void interpolation_level( int level = 0 )   { apu.interpolation_level( level ); }
 
-	// Allows an external timing engine to split native 32 kHz generation.
+	// Allows an external timing engine to split native generation in 1/64000 s
+	// slots, including halfway through a stereo DSP sample pair.
 	typedef int  (*native_play_limit_t)( void*, int );
 	typedef void (*native_play_advance_t)( void*, int );
 	void set_native_play_callbacks( void* data, native_play_limit_t limit,

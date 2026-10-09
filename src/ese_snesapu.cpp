@@ -149,13 +149,11 @@ int Script700NativePlayLimit(void*, int count)
 	if (!script700.enabled() || !script700.waitTicks())
 		return count;
 
-	unsigned long long frames = (script700.waitTicks() + 63) / 64;
-	const unsigned long long available = static_cast<unsigned long long>(count / 2);
-	if (frames > available)
-		frames = available;
-	if (!frames)
-		frames = 1;
-	return static_cast<int>(frames * 2);
+	// One stereo sample slot corresponds to 32 Script700 clocks (1/64000 s).
+	unsigned long long slots = (script700.waitTicks() + 31) / 32;
+	if (slots > static_cast<unsigned long long>(count))
+		slots = count;
+	return static_cast<int>(slots);
 }
 
 void Script700NativePlayAdvance(void*, int count)
@@ -164,7 +162,7 @@ void Script700NativePlayAdvance(void*, int count)
 		return;
 
 	RefreshScript700OutputPorts();
-	script700.advance(static_cast<unsigned long long>(count / 2) * 64);
+	script700.advance(static_cast<unsigned long long>(count) * 32);
 	FlushScript700InputPorts();
 }
 
@@ -222,6 +220,7 @@ void __stdcall LoadSPCFile(void *pFile)
 				Script700NativePlayLimit, Script700NativePlayAdvance);
 			script700.attach(snes->apu.smp_ram(), scriptInputPorts, scriptOutputPorts);
 			script700.reset();
+			script700.advance(script700.nativeTimingLeadTicks());
 			if (script700.enabled())
 				UpdateScript700Ports();
 		}

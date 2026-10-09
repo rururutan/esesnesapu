@@ -54,7 +54,7 @@ namespace
 Script700::Script700()
 	: pc_(0), waitTicks_(0), enabled_(false), stopped_(true),
 	  flushEnabled_(true), flushWaiting_(false), ram_(nullptr),
-	  inputPorts_(nullptr), outputPorts_(nullptr), volume_(1.0f)
+	  inputPorts_(nullptr), outputPorts_(nullptr), volume_(1.0f), ramStreaming_(false)
 {
 	std::fill(work_, work_ + 8, 0);
 	std::fill(compare_, compare_ + 2, 0);
@@ -76,6 +76,7 @@ void Script700::disable()
 	volume_ = 1.0f;
 	std::fill(sourceMute_, sourceMute_ + 256, false);
 	enabled_ = false;
+	ramStreaming_ = false;
 	reset();
 }
 
@@ -84,7 +85,8 @@ void Script700::reset()
 	std::fill(work_, work_ + 8, 0);
 	std::fill(compare_, compare_ + 2, 0);
 	pc_ = 0;
-	waitTicks_ = 0;
+	// SNESAPU starts Script700 on the first 64 kHz scheduling interrupt.
+	waitTicks_ = enabled_ ? 32 : 0;
 	inputPortWrites_.clear();
 	flushEnabled_ = true;
 	flushWaiting_ = false;
@@ -115,7 +117,15 @@ const std::string& Script700::error() const
 
 std::uint64_t Script700::waitTicks() const
 {
-	return flushWaiting_ ? 64 : waitTicks_;
+	return flushWaiting_ ? 32 : waitTicks_;
+}
+
+std::uint64_t Script700::nativeTimingLeadTicks() const
+{
+	// GME's pipelined BRR decoder consumes the streamed source a block ahead
+	// of SNESAPU's block decoder. Supply RAM-only streams one 16-sample BRR
+	// block earlier, without advancing SPC execution or audio output.
+	return ramStreaming_ ? 16 * 64 : 0;
 }
 
 bool Script700::takeInputPortWrite(std::uint8_t& port, std::uint8_t& value)
@@ -426,6 +436,19 @@ compile_error:
 
 	program_.swap(compiled);
 	data_.swap(parsedData);
+	bool writesRamBytes = false;
+	bool usesPorts = false;
+	for (const Instruction& instruction : program_)
+	{
+		writesRamBytes |= instruction.code == OpCode::Move &&
+			instruction.second.type == OperandType::Ram8;
+		usesPorts |= instruction.first.type == OperandType::InputPort ||
+			instruction.first.type == OperandType::OutputPort ||
+			instruction.second.type == OperandType::InputPort ||
+			instruction.second.type == OperandType::OutputPort ||
+			instruction.code == OpCode::Flush;
+	}
+	ramStreaming_ = !data_.empty() && writesRamBytes && !usesPorts;
 	volume_ = parsedVolume;
 	std::copy(parsedSourceMute, parsedSourceMute + 256, sourceMute_);
 	error_.clear();

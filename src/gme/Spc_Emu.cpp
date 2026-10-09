@@ -348,6 +348,9 @@ blargg_err_t Spc_Emu::start_track_( int track )
 
 blargg_err_t Spc_Emu::play_and_filter( int count, sample_t out [] )
 {
+	// Keep a complete stereo output buffer, but allow the timing engine to
+	// interrupt the SPC CPU between DSP sample pairs (16 SPC clocks).
+	apu.set_output( out, count );
 	int remain = count;
 	while ( remain > 0 )
 	{
@@ -357,18 +360,16 @@ blargg_err_t Spc_Emu::play_and_filter( int count, sample_t out [] )
 			current = native_play_limit( native_play_data, current );
 			if ( current <= 0 || current > remain )
 				current = remain;
-			current &= ~1;
-			if ( !current )
-				current = 2;
 		}
 
-		RETURN_ERR( apu.play( current, out ) );
-		filter.run( out, current );
+		apu.end_frame( current * (Snes_Spc::clocks_per_sample / 2) );
 		if ( native_play_advance )
 			native_play_advance( native_play_data, current );
-		out += current;
 		remain -= current;
 	}
+	// Retrieve and clear CPU errors without advancing emulation further.
+	RETURN_ERR( apu.play( 0, out ) );
+	filter.run( out, count );
 	return blargg_ok;
 }
 

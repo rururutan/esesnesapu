@@ -18,6 +18,7 @@ public:
 	void reset();
 	void advance(std::uint64_t ticks);
 	std::uint64_t waitTicks() const;
+	std::uint64_t nativeTimingLeadTicks() const;
 	bool enabled() const;
 	float volume() const;
 	bool sourceMuted(unsigned source) const;
@@ -117,5 +118,6 @@ private:
 	std::string error_;
 	float volume_;
 	bool sourceMute_[256];
+	bool ramStreaming_;
 	std::deque<std::pair<std::uint8_t, std::uint8_t>> inputPortWrites_;
 };
